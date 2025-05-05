@@ -1,18 +1,23 @@
 package models
 
+type BaseResponse struct {
+	Success   bool   `json:"success"`
+	Timestamp string `json:"timestamp"`
+}
+
 type ApiResponse struct {
-	Success   bool      `json:"success"`
-	Timestamp string    `json:"timestamp"`
-	Data      GamesData `json:"data"`
+	BaseResponse
+	Data GamesData `json:"data"`
 }
 
 type ErrorResponse struct {
-	Success   bool   `json:"success"`
-	Timestamp string `json:"timestamp"`
-	Error     struct {
-		Message string `json:"message"`
-		Code    int    `json:"code"`
-	} `json:"error"`
+	BaseResponse
+	Error ErrorDetails `json:"error"`
+}
+
+type ErrorDetails struct {
+	Message string `json:"message"`
+	Code    int    `json:"code"`
 }
 
 type GamesData struct {

@@ -10,17 +10,41 @@ import (
 )
 
 const (
-	EPIC_API = "https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=en-US&country=ID&allowCountries=ID"
+	EpicAPIURL         = "https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions"
+	EpicStoreBaseURL   = "https://store.epicgames.com/en-US/p/"
+	StatusFreeNow      = "FREE NOW"
+	StatusComingSoon   = "COMING SOON"
+	DefaultDiscount    = "100%"
+	DefaultSeller      = "Unknown"
+	ImageTypeWide      = "OfferImageWide"
+	ImageTypeThumbnail = "Thumbnail"
 )
 
-type EpicService struct{}
+type EpicService struct {
+	client *http.Client
+}
 
 func NewEpicService() *EpicService {
-	return &EpicService{}
+	return &EpicService{
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
 }
 
 func (s *EpicService) GetFreeGames() (*models.GamesData, error) {
-	resp, err := http.Get(EPIC_API)
+	req, err := http.NewRequest(http.MethodGet, EpicAPIURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	q := req.URL.Query()
+	q.Add("locale", "en-US")
+	q.Add("country", "ID")
+	q.Add("allowCountries", "ID")
+	req.URL.RawQuery = q.Encode()
+
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -34,45 +58,47 @@ func (s *EpicService) GetFreeGames() (*models.GamesData, error) {
 	currentGames, upcomingGames := s.filterFreeGames(epicResp)
 
 	return &models.GamesData{
-		Current:  s.formatGames(currentGames, "FREE NOW"),
-		Upcoming: s.formatGames(upcomingGames, "COMING SOON"),
+		Current:  s.formatGames(currentGames, StatusFreeNow),
+		Upcoming: s.formatGames(upcomingGames, StatusComingSoon),
 	}, nil
 }
 
-func (s *EpicService) filterFreeGames(data models.EpicResponse) ([]models.Game, []models.Game) {
-	var currentGames, upcomingGames []models.Game
-
+func (s *EpicService) filterFreeGames(data models.EpicResponse) (current, upcoming []models.Game) {
 	for _, game := range data.Data.Catalog.SearchStore.Elements {
-		if len(game.Promotions.PromotionalOffers) == 0 && len(game.Promotions.UpcomingPromotionalOffers) == 0 {
+		if !s.hasValidPromotions(game) {
 			continue
 		}
 
-		if len(game.Promotions.PromotionalOffers) > 0 &&
-			len(game.Promotions.PromotionalOffers[0].PromotionalOffers) > 0 &&
-			game.Price.TotalPrice.DiscountPrice == 0 {
-			currentGames = append(currentGames, game)
-		} else if len(game.Promotions.UpcomingPromotionalOffers) > 0 &&
-			len(game.Promotions.UpcomingPromotionalOffers[0].PromotionalOffers) > 0 &&
-			game.Promotions.UpcomingPromotionalOffers[0].PromotionalOffers[0].DiscountSetting.DiscountPercentage == 0 {
-			upcomingGames = append(upcomingGames, game)
+		if s.isCurrentlyFree(game) {
+			current = append(current, game)
+		} else if s.isUpcomingFree(game) {
+			upcoming = append(upcoming, game)
 		}
 	}
+	return current, upcoming
+}
 
-	return currentGames, upcomingGames
+func (s *EpicService) hasValidPromotions(game models.Game) bool {
+	return len(game.Promotions.PromotionalOffers) > 0 || len(game.Promotions.UpcomingPromotionalOffers) > 0
+}
+
+func (s *EpicService) isCurrentlyFree(game models.Game) bool {
+	return len(game.Promotions.PromotionalOffers) > 0 &&
+		len(game.Promotions.PromotionalOffers[0].PromotionalOffers) > 0 &&
+		game.Price.TotalPrice.DiscountPrice == 0
+}
+
+func (s *EpicService) isUpcomingFree(game models.Game) bool {
+	return len(game.Promotions.UpcomingPromotionalOffers) > 0 &&
+		len(game.Promotions.UpcomingPromotionalOffers[0].PromotionalOffers) > 0 &&
+		game.Promotions.UpcomingPromotionalOffers[0].PromotionalOffers[0].DiscountSetting.DiscountPercentage == 0
 }
 
 func (s *EpicService) formatGames(games []models.Game, status string) []models.FormattedGame {
-	var formattedGames []models.FormattedGame
+	formattedGames := make([]models.FormattedGame, 0, len(games))
 
 	for _, game := range games {
-		var endDate string
-
-		if status == "FREE NOW" && len(game.Promotions.PromotionalOffers) > 0 && len(game.Promotions.PromotionalOffers[0].PromotionalOffers) > 0 {
-			endDate = game.Promotions.PromotionalOffers[0].PromotionalOffers[0].EndDate
-		} else if len(game.Promotions.UpcomingPromotionalOffers) > 0 && len(game.Promotions.UpcomingPromotionalOffers[0].PromotionalOffers) > 0 {
-			endDate = game.Promotions.UpcomingPromotionalOffers[0].PromotionalOffers[0].EndDate
-		}
-
+		endDate := s.getEndDate(game, status)
 		endDateTime, _ := time.Parse(time.RFC3339, endDate)
 		effectiveTime, _ := time.Parse(time.RFC3339, game.EffectiveDate)
 
@@ -83,17 +109,20 @@ func (s *EpicService) formatGames(games []models.Game, status string) []models.F
 	return formattedGames
 }
 
-func (s *EpicService) createFormattedGame(game models.Game, status string, effectiveTime, endDateTime time.Time) models.FormattedGame {
-	var wideURL, thumbnailURL string
-	for _, img := range game.KeyImages {
-		if img.Type == "OfferImageWide" {
-			wideURL = img.URL
-		}
-		if img.Type == "Thumbnail" {
-			thumbnailURL = img.URL
-		}
+func (s *EpicService) getEndDate(game models.Game, status string) string {
+	if status == StatusFreeNow && len(game.Promotions.PromotionalOffers) > 0 &&
+		len(game.Promotions.PromotionalOffers[0].PromotionalOffers) > 0 {
+		return game.Promotions.PromotionalOffers[0].PromotionalOffers[0].EndDate
 	}
+	if len(game.Promotions.UpcomingPromotionalOffers) > 0 &&
+		len(game.Promotions.UpcomingPromotionalOffers[0].PromotionalOffers) > 0 {
+		return game.Promotions.UpcomingPromotionalOffers[0].PromotionalOffers[0].EndDate
+	}
+	return ""
+}
 
+func (s *EpicService) createFormattedGame(game models.Game, status string, effectiveTime, endDateTime time.Time) models.FormattedGame {
+	images := s.getGameImages(game)
 	pageSlug := s.getPageSlug(game)
 
 	formatted := models.FormattedGame{
@@ -106,17 +135,35 @@ func (s *EpicService) createFormattedGame(game models.Game, status string, effec
 		Price: models.GamePrice{
 			OriginalPrice:          game.Price.TotalPrice.OriginalPrice,
 			FormattedOriginalPrice: game.Price.TotalPrice.FmtPrice.OriginalPrice,
-			Discount:               "100%",
+			Discount:               DefaultDiscount,
 			Current:                s.getCurrentPrice(status),
 		},
 	}
 
-	formatted.Images.Wide = wideURL
-	formatted.Images.Thumbnail = thumbnailURL
-	formatted.URLs.Product = "https://store.epicgames.com/en-US/p/" + pageSlug
+	formatted.Images.Wide = images.wide
+	formatted.Images.Thumbnail = images.thumbnail
+	formatted.URLs.Product = EpicStoreBaseURL + pageSlug
 	formatted.Availability.EndDate = utils.FormatDate(endDateTime)
 
 	return formatted
+}
+
+type gameImages struct {
+	wide      string
+	thumbnail string
+}
+
+func (s *EpicService) getGameImages(game models.Game) gameImages {
+	var images gameImages
+	for _, img := range game.KeyImages {
+		switch img.Type {
+		case ImageTypeWide:
+			images.wide = img.URL
+		case ImageTypeThumbnail:
+			images.thumbnail = img.URL
+		}
+	}
+	return images
 }
 
 func (s *EpicService) getPageSlug(game models.Game) string {
@@ -133,12 +180,12 @@ func (s *EpicService) getSellerName(game models.Game) string {
 	if game.Seller.Name != "" {
 		return game.Seller.Name
 	}
-	return "Unknown"
+	return DefaultSeller
 }
 
 func (s *EpicService) getCurrentPrice(status string) string {
-	if status == "FREE NOW" {
+	if status == StatusFreeNow {
 		return "FREE"
 	}
-	return "COMING SOON"
+	return StatusComingSoon
 }

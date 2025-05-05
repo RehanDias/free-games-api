@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"free-games-epic/internal/server"
-	"free-games-epic/internal/services"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"free-games-epic/internal/server"
+	"free-games-epic/internal/services"
 )
 
 func main() {
@@ -19,14 +20,14 @@ func main() {
 	router := server.NewRouter(epicService)
 
 	// Create server with configured routes
-	server := server.NewServer(router.Setup())
+	srv := server.NewServer(router.Setup())
 
 	// Channel to listen for errors coming from the listener.
 	serverErrors := make(chan error, 1)
 
 	// Start the server
 	go func() {
-		serverErrors <- server.Start()
+		serverErrors <- srv.Start()
 	}()
 
 	// Channel to listen for an interrupt or terminate signal from the OS.
@@ -46,7 +47,7 @@ func main() {
 		defer cancel()
 
 		// Asking listener to shut down and shed load.
-		if err := server.Shutdown(ctx); err != nil {
+		if err := srv.Shutdown(ctx); err != nil {
 			log.Printf("Graceful shutdown did not complete in %v : %v", 15*time.Second, err)
 			os.Exit(1)
 		}

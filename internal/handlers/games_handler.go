@@ -24,27 +24,43 @@ func (h *GamesHandler) GetFreeGames(w http.ResponseWriter, r *http.Request) {
 
 	games, err := h.epicService.GetFreeGames()
 	if err != nil {
-		h.sendError(w, "Failed to fetch free games", http.StatusInternalServerError)
+		h.sendResponse(w, h.createErrorResponse("Failed to fetch free games", http.StatusInternalServerError))
 		return
 	}
 
-	response := models.ApiResponse{
-		Success:   true,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Data:      *games,
-	}
-
-	json.NewEncoder(w).Encode(response)
+	h.sendResponse(w, h.createSuccessResponse(games))
 }
 
-func (h *GamesHandler) sendError(w http.ResponseWriter, message string, code int) {
-	response := models.ErrorResponse{
-		Success:   false,
-		Timestamp: time.Now().Format(time.RFC3339),
+func (h *GamesHandler) createSuccessResponse(data *models.GamesData) *models.ApiResponse {
+	return &models.ApiResponse{
+		BaseResponse: models.BaseResponse{
+			Success:   true,
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+		Data: *data,
 	}
-	response.Error.Message = message
-	response.Error.Code = code
+}
 
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(response)
+func (h *GamesHandler) createErrorResponse(message string, code int) *models.ErrorResponse {
+	return &models.ErrorResponse{
+		BaseResponse: models.BaseResponse{
+			Success:   false,
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+		Error: models.ErrorDetails{
+			Message: message,
+			Code:    code,
+		},
+	}
+}
+
+func (h *GamesHandler) sendResponse(w http.ResponseWriter, response interface{}) {
+	if errResp, ok := response.(*models.ErrorResponse); ok {
+		w.WriteHeader(errResp.Error.Code)
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(h.createErrorResponse("Failed to encode response", http.StatusInternalServerError))
+	}
 }
