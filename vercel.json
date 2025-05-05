@@ -9,7 +9,7 @@
     "routes": [
         {
             "src": "/api/(.*)",
-            "dest": "/api/free-games"
+            "dest": "/api/$1"
         }
     ]
 }
